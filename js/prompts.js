@@ -11,11 +11,16 @@
     knowledge: '学识', morality: '品德', luck: '运气'
   };
 
-  // 属性变动 → 中文文案（用于本地降级结果提示）
+  // 属性变动 → 中文文案（用于本地降级结果提示；资产以"万"为单位）
   function formatEffects(effects) {
     const keys = Object.keys(effects || {}).filter(k => ATTR_NAME[k]);
     if (!keys.length) return '无明显变化';
-    return keys.map(k => ATTR_NAME[k] + (effects[k] > 0 ? '+' : '') + effects[k]).join('，');
+    return keys.map(k => {
+      if (k === 'wealth') {
+        return ATTR_NAME[k] + (effects[k] > 0 ? '+' : '') + effects[k] + '万';
+      }
+      return ATTR_NAME[k] + (effects[k] > 0 ? '+' : '') + effects[k];
+    }).join('，');
   }
 
   // 结局倾向（本地降级/界面展示用；AI 结局时由服务端判定）

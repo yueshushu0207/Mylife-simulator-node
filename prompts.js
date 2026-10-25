@@ -1,8 +1,12 @@
 /* ============================================================
  * prompts.js — 固定提示词（仅存于服务端，前端无法查看/篡改）
  * 四种场景：birth 出生 / event 事件+选项 / outcome 结果反馈 / ending 结局
+ * 时代背景：角色生辰由玩家填写，服务端依据出生年份锁定年代，
+ *           全部剧情必须符合该年代（科技/物价/职业/政策/生活方式）
  * ============================================================ */
 'use strict';
+
+const Bazi = require('./js/bazi.js');
 
 const ATTR_NAME_MAP = {
   health: '健康', emotion: '情感', social: '社会', wealth: '资产',
@@ -17,13 +21,8 @@ function attrLevel(v) {
   return '危险';
 }
 
-function wealthLevel(v) {
-  if (v >= 1000) return '巨富';
-  if (v >= 200) return '富裕';
-  if (v >= 60) return '小康';
-  if (v >= 20) return '普通';
-  if (v >= 8) return '拮据';
-  return '贫困';
+function wealthLevel(v, year) {
+  return Bazi.wealthTier(year, v).label;
 }
 
 function talentsText(talents, withDesc = true) {
@@ -37,6 +36,8 @@ function talentsText(talents, withDesc = true) {
 function stateDigest(s) {
   const a = s.attrs || {};
   const fam = s.family || {};
+  const birthYear = (s.birth && s.birth.year) || null;
+  const wealthView = Bazi.wealthTier(birthYear, a.wealth);
   const lines = [
     '【角色当前状态】',
     `年龄：${s.age} 岁（${s.stage}）`,
@@ -47,11 +48,21 @@ function stateDigest(s) {
     `  健康 ${a.health}（${attrLevel(a.health)}）`,
     `  情感 ${a.emotion}（${attrLevel(a.emotion)}）`,
     `  社会 ${a.social}（${attrLevel(a.social)}）`,
-    `  资产 ${a.wealth}万（${wealthLevel(a.wealth)}，资产无上限，数值即存款的万元数）`,
+    `  资产 ${a.wealth}万（同时代观感：${wealthView.label}——${wealthView.desc}；约值2026年价 ${wealthView.realWan} 万元。资产无上限，数值即存款的万元数）`,
     `  学识 ${a.knowledge}（${attrLevel(a.knowledge)}）`,
     `  品德 ${a.morality}（${attrLevel(a.morality)}）`,
     `  运气 ${a.luck}（${attrLevel(a.luck)}）`
   ];
+  // 生辰与时代背景（玩家填写生辰后排盘，服务端锁定年代）
+  const b = s.birth;
+  if (b && b.year) {
+    lines.push('【生辰与时代背景】');
+    lines.push(`出生：${b.year} 年 ${b.month} 月 ${b.day} 日（${b.hourLabel || '时辰不详'}）`);
+    lines.push(`八字：${b.bazi.year}年 ${b.bazi.month}月 ${b.bazi.day}日 ${b.bazi.hour}时；日主${b.dayMaster}（${b.dayMasterNature}）；${b.wuxingText}`);
+    lines.push(`时代背景：${b.era.label}（${b.era.from}-${b.era.to}）——${b.era.backdrop}`);
+    lines.push(`年代购买力：${Bazi.purchaseFor(b.year).anchor}（写金额时按当年物价，如上面的"资产 ${a.wealth}万"在该年代观感为"${wealthView.label}"）`);
+    lines.push(`当前公历年份 = 出生年份 ${b.year} + 年龄 ${s.age} = ${b.year + s.age} 年`);
+  }
   if (s.age >= 61) lines.push('提示：角色已步入老年，身体机能下降是不可回避的主题。');
   if (a.health <= 20) lines.push('提示：健康已岌岌可危，本次事件应体现疾病/病危压力。');
   if (a.emotion <= 20) lines.push('提示：情绪处于抑郁边缘，可安排心理危机事件，但出路应包含求助选项。');
@@ -105,7 +116,13 @@ function formatEffects(effects) {
   const parts = [];
   for (const [k, v] of Object.entries(effects || {})) {
     if (!ATTR_NAME_MAP[k]) continue;
-    parts.push(ATTR_NAME_MAP[k] + (v > 0 ? '+' : '') + v);
+    // 资产用具体金额展示（如 资产 +50W），其余属性用点数
+    if (k === 'wealth') {
+      const sign = v > 0 ? '+' : '';
+      parts.push(ATTR_NAME_MAP[k] + sign + v + '万');
+    } else {
+      parts.push(ATTR_NAME_MAP[k] + (v > 0 ? '+' : '') + v);
+    }
   }
   return parts.length ? parts.join('，') : '无明显变化';
 }
@@ -138,6 +155,13 @@ function eventSystemPrompt() {
     '9. 如给定"必触人生节点"，事件必须紧密围绕该节点展开，这是本年龄不可跳过的主线。',
     '10. 禁止低俗、色情、暴力血腥、违法犯罪美化、违背公序良俗的内容；自杀、自残只能作为心理危机背景出现，且选项必须指向求助与疗愈。',
     '11. 禁止与最近 3 条已发生事件重复主题。',
+    '12. 【时代铁律·最高优先级】角色生于给定出生年份，当前公历年份 = 出生年份 + 年龄，一切事件必须严格符合该年代：',
+    '   - 科技与器物严禁穿越：1977 年前不存在高考（1966-1976 年间学校停课、城市青年上山下乡）；1980 年代前没有互联网与手机；1990 年代前没有商品房、股票与大哥大以外的通讯方式；2007 年前没有智能手机与移动支付；2012 年前短视频/外卖/网约车尚未普及。',
+    '   - 职业、政策、生活方式、流行文化、观念必须符合当年（如 1980 年代的"万元户"与个体户、1990 年代的下岗与下海、2000 年代的进城务工与网吧、2010 年代的996与考研考公）。',
+    '   - 固定人生节点在不同时代形态迥异，必须按时代改写：如 1977 年前的高考改写为上山下乡/招工/推荐上大学；1990 年代的"毕业包分配"与 2010 年代的"社招/考公"完全不同；婚恋压力、住房、生育观念随年代显著变化。',
+    '   - wealth 数值 = 万元人民币（统一记账口径），单次变动幅度必须符合年代购买力：1949-1979 年 1 万元是巨款，单次变动多在 -3 ~ +3；1980-1999 年 -5 ~ +10；2000-2009 年 -10 ~ +20；2010 年后 -15 ~ +30（重大事件可至 ±30）。文案中的具体金额须与 effects 自洽且符合当年物价（如 1960 年代"攒下第一个一万块"即是万元户，2010 年代"首付上百万"）。',
+    '   - 家境数值同样按时代理解：艰难岁月中家境 10-20 万已属凤毛麟角，2010 年代家境百万也只是普通城市家庭。',
+    '   - 历史大事可作背景或人生转折，但只取与角色年龄段相称的，用生活化、中立的笔触书写，不评价政治，不涉及政治人物。',
     '',
     '【输出 Schema】',
     '{',
@@ -159,32 +183,55 @@ function eventSystemPrompt() {
 /* ---------------- 四种场景的 messages 构建 ---------------- */
 
 function buildBirthMessages(s) {
+  const b = s.birth || null;
   const sys = [
     '你是"文字人生模拟器"的出生叙事引擎，只输出一个 JSON 对象，不要输出任何多余文字或 markdown。',
-    '任务：根据随机生成的角色基础信息，撰写一段出生剧情，交代家庭背景、父母状况、出生环境与一个有记忆点的降生细节，为一生埋下基调。',
+    '任务：根据给定的出生信息（生辰、八字、性别、家境），撰写一段出生剧情，交代家庭背景、父母状况、接生场景、出生环境与一个有记忆点的降生细节，为一生埋下基调。',
     '要求：',
     '1. 第二人称"你"叙事，120-180 字，文笔克制、真实、有烟火气，不浮夸；',
-    '2. 家境描述必须与给定资产水平相符，天赋可以被家人隐约察觉或以民间说法体现；',
-    '3. 年代做模糊化处理（可写"这一年""二十多年前"等），不涉及真实政治人物与事件；',
-    '4. 输出 Schema：{"title":"降生","description":"..."}'
+    b && b.year
+      ? `2. 故事必须精确设定在 ${b.year} 年 ${b.month} 月：接生方式（乡镇卫生院/接生婆/医院产房）、家庭陈设、父母衣着与观念、当地风貌、时令节气必须符合该年代与家境；`
+      : '2. 年代做模糊化处理（可写"这一年"等），不涉及真实政治人物与事件；',
+    b && b.year
+      ? `3. 家境与时代购买力相符（角色生于${b.era.label}：${b.era.backdrop}），"富"与"穷"的写法必须符合该年代；`
+      : '3. 家境描述必须与给定资产水平相符；',
+    '4. 八字与五行可以民间说法隐约体现（如"八字齐全""八字火旺""命中缺水"、家人请人算过命），作为命运伏笔，但文案中不得出现任何属性名与数值；',
+    '5. 中立写实，不涉及政治人物与政治评价；',
+    '6. 输出 Schema：{"title":"降生","description":"..."}'
   ].join('\n');
   const a = s.attrs || {};
   const fam = s.family || {};
-  const user = [
+  const userParts = [
     `性别：${s.gender}`,
     `天赋：${talentsText(s.talents)}`,
-    `家境：${fam.level || ''}——${fam.desc || ''}`,
-    `初始属性：健康${a.health} 情感${a.emotion} 社会${a.social} 资产${a.wealth} 学识${a.knowledge} 品德${a.morality} 运气${a.luck}`
-  ].join('\n');
-  return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+    `家境：${fam.level || ''}——${fam.desc || ''}`
+  ];
+  if (b && b.year) {
+    userParts.push(`出生：${b.year} 年 ${b.month} 月 ${b.day} 日（${b.hourLabel || '时辰不详'}）`);
+    userParts.push(`八字：${b.bazi.year}年 ${b.bazi.month}月 ${b.bazi.day}日 ${b.bazi.hour}时；日主${b.dayMaster}（${b.dayMasterNature}）；${b.wuxingText}`);
+    userParts.push(`时代背景：${b.era.label}——${b.era.backdrop}`);
+    userParts.push(`年代购买力：${Bazi.purchaseFor(b.year).anchor}`);
+  }
+  userParts.push(`初始属性：健康${a.health} 情感${a.emotion} 社会${a.social} 资产${a.wealth} 学识${a.knowledge} 品德${a.morality} 运气${a.luck}`);
+  return [{ role: 'system', content: sys }, { role: 'user', content: userParts.join('\n') }];
 }
 
 function buildEventMessages(s, extra) {
   const milestone = (extra && extra.milestone) || null;
   const prev = (extra && extra.prev) || null;
   const userParts = [stateDigest(s), '', recentDigest(s), ''];
+  // 时代大事年表：只取角色一生可能经历的，供 AI 按年龄段取材
+  const b = s.birth;
+  if (b && b.year) {
+    const events = Bazi.eraEventsFor(b.year, s.lifespan);
+    if (events.length) {
+      userParts.push('【时代大事年表（仅取与角色年龄段相称的可作背景，生活化、中立书写）】');
+      userParts.push(events.map(e => e[0] + '年：' + e[1]).join('；'));
+      userParts.push('');
+    }
+  }
   if (milestone && milestone.label) {
-    userParts.push(`【必触人生节点】本次事件必须围绕「${milestone.label}」展开，is_milestone 设为 true。`);
+    userParts.push(`【必触人生节点】本次事件必须围绕「${milestone.label}」展开，is_milestone 设为 true。注意该节点须按角色所处年代改写形态（如 1977 年前无高考，应写为上山下乡/招工/推荐上大学等）。`);
   } else {
     userParts.push(`请生成一个符合当前年龄与状态的${randomEventType(s)}，is_milestone 设为 false。`);
   }
@@ -211,7 +258,8 @@ function buildOutcomeMessages(s, extra) {
     '1. outcome 字段：90-160 字，第二人称，交代选择带来的直接结果、旁人反应与主角感受，可自然埋下后续伏笔；',
     '2. 必须与选项逻辑一致，不得出现与选择相反的结果；',
     '3. 不要在文案中罗列属性数字（属性变动由系统另行计算）；',
-    '4. 真实克制，不编造超自然情节。',
+    '4. 剧情必须符合角色所处年代（见角色状态中的出生年份与时代背景）；',
+    '5. 真实克制，不编造超自然情节。',
     '输出 Schema：{"outcome":"..."}'
   ].join('\n');
   const user = [
@@ -242,25 +290,33 @@ function buildEndingMessages(s, extra) {
     '3. evaluation：80-120 字，对这一生的总体评价，克制而有温度；',
     '4. highlights：5-8 条数组，每条 12-24 字，摘取人生最关键节点与抉择；',
     `5. 倾向判定参考："${tier.label}"——${tier.hint}`,
-    '6. 输出 Schema：{"ending_title":"","summary":"","evaluation":"","highlights":[""]}'
+    '6. 生平须呼应角色所处时代背景（出生年份见输入），关键抉择放在时代语境中书写；',
+    '7. 中立写实，不涉及政治人物与政治评价；',
+    '8. 输出 Schema：{"ending_title":"","summary":"","evaluation":"","highlights":[""]}'
   ].join('\n');
 
   const a = s.attrs || {};
   const peaks = Object.entries(s.peak || {}).filter(([k]) => ATTR_NAME_MAP[k]).map(([k, v]) => ATTR_NAME_MAP[k] + v);
   const troughs = Object.entries(s.trough || {}).filter(([k]) => ATTR_NAME_MAP[k]).map(([k, v]) => ATTR_NAME_MAP[k] + v);
 
-  const user = [
+  const userParts = [
     `【死亡信息】${(extra && extra.cause) || '寿终正寝'}，享年 ${s.age} 岁`,
     `【性别】${s.gender}`,
-    `【天赋】${talentsText(s.talents, false)}`,
+    `【天赋】${talentsText(s.talents, false)}`
+  ];
+  const b = s.birth;
+  if (b && b.year) {
+    userParts.push(`【出生】${b.year} 年（${b.era.label}），八字：${b.bazi.year}年 ${b.bazi.month}月 ${b.bazi.day}日 ${b.bazi.hour}时，日主${b.dayMaster}`);
+  }
+  userParts.push(
     `【最终属性】健康${a.health} 情感${a.emotion} 社会${a.social} 资产${a.wealth} 学识${a.knowledge} 品德${a.morality} 运气${a.luck}`,
     `属性峰值：${peaks.join(' ')}`,
     `属性谷值：${troughs.join(' ')}`,
     '',
     '【一生履历（按时间）】',
     condensed
-  ].join('\n');
-  return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+  );
+  return [{ role: 'system', content: sys }, { role: 'user', content: userParts.join('\n') }];
 }
 
 /* 入口：按场景构建 messages 与采样参数 */
@@ -274,4 +330,4 @@ function buildRequest(kind, state, extra) {
   }
 }
 
-module.exports = { buildRequest };
+module.exports = { buildRequest, endingTier, formatEffects };

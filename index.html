@@ -3,8 +3,27 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>人生模拟器 · 文字版</title>
-  <link rel="stylesheet" href="styles.css?v=16" />
+
+  <!-- SEO 统一由 seo.js 生成，server.js 注入到下方 SEO 占位符；
+       以下静态段为「纯静态托管（无 Node 后端）」时的兜底，Node 服务下会被剔除，避免重复标签 -->
+  <!--STATIC_SEO-->
+  <title>人生模拟器 · 文字版 · 输入八字重启一生</title>
+  <meta name="description" content="输入生辰八字，AI 为你排盘并锁定时代背景，从降生到暮年走完一生：1949 年至今十二个年代的风貌、物价与观念真实还原，每一次盲选都在改写七维属性。出品：金亥跃江，作者：岳泽霖。" />
+  <meta name="keywords" content="人生模拟器,人生重开模拟器,文字版人生模拟器,AI 人生模拟,八字排盘,生辰八字,四柱八字,五行,日主,DeepSeek,怀旧年代,命运抉择,岳泽霖,金亥跃江,金亥跃江聊量化" />
+  <meta name="author" content="岳泽霖（金亥跃江）" />
+  <meta name="robots" content="index,follow" />
+  <meta name="theme-color" content="#c9a227" />
+  <link rel="canonical" href="/" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="人生模拟器 · 文字版" />
+  <meta property="og:description" content="输入生辰八字，AI 排盘锁定时代背景，从降生到暮年走完一生。出品：金亥跃江，作者：岳泽霖。" />
+  <meta property="og:image" content="/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <!--/STATIC_SEO-->
+  <!--SEO_META-->
+
+  <link rel="stylesheet" href="styles.css?v=18" />
 </head>
 <body>
   <!-- ============ 开局屏 ============ -->
@@ -21,6 +40,45 @@
         <div class="feature"><span class="feature-ic">♾</span><p>多结局轮回<br /><small>传奇 / 顺遂 / 坎坷 / 悲剧</small></p></div>
       </div>
 
+      <!-- ============ 生辰表单（定时代） ============ -->
+      <div class="birth-panel">
+        <div class="birth-panel-title">写 入 生 辰 · 定 格 时 代</div>
+        <p class="birth-panel-tip">填写出生信息，AI 将据此排盘八字、锁定时代背景——一生际遇，皆随时代流转</p>
+        <div class="birth-grid">
+          <div class="bf-field">
+            <label>出生年份</label>
+            <input type="number" id="bf-year" class="form-input" min="1949" max="2026" step="1" value="1990" />
+          </div>
+          <div class="bf-field">
+            <label>出生月份</label>
+            <select id="bf-month" class="form-input"></select>
+          </div>
+          <div class="bf-field">
+            <label>出生日期</label>
+            <select id="bf-day" class="form-input"></select>
+          </div>
+          <div class="bf-field">
+            <label>出生时辰</label>
+            <select id="bf-hour" class="form-input"></select>
+          </div>
+          <div class="bf-field">
+            <label>性别</label>
+            <div class="seg" id="bf-gender">
+              <button type="button" data-v="男">男</button>
+              <button type="button" data-v="女">女</button>
+              <button type="button" data-v="随机" class="on">随机</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="bazi-preview">
+          <div class="bazi-pillars" id="bazi-pillars"></div>
+          <div class="bazi-meta" id="bazi-meta"></div>
+          <div class="bazi-era" id="bazi-era"></div>
+        </div>
+        <p class="birth-error" id="birth-error"></p>
+      </div>
+
       <div class="start-actions">
         <button id="btn-new-life" class="btn btn-primary btn-lg">开启新人生</button>
         <button id="btn-continue" class="btn btn-ghost btn-lg" disabled>继续上一段人生</button>
@@ -31,6 +89,10 @@
         <a id="open-settings-start" class="link-btn">API 设置</a>
       </div>
       <p class="start-tip">内容由 DeepSeek 大模型实时生成，加载剧情需联网，请耐心等待数秒</p>
+
+      <footer class="site-footer">
+        <p>出品 · <b>金亥跃江</b> <span class="sf-dot">|</span> 作者 · <b>岳泽霖</b> <span class="sf-dot">|</span> 公众号「金亥跃江聊量化」</p>
+      </footer>
     </div>
   </section>
 
@@ -103,6 +165,8 @@
         <span id="ending-gender"></span>
         <span class="link-dot">·</span>
         <span id="ending-tier"></span>
+        <span class="link-dot" id="ending-era-dot">·</span>
+        <span id="ending-era"></span>
       </div>
 
       <div class="ending-summary" id="ending-summary"></div>
@@ -160,8 +224,8 @@
       </div>
       <div class="modal-body">
         <label class="form-label">后端接口地址</label>
-        <input type="text" id="input-endpoint" class="form-input" placeholder="api/deepseek.php" />
-        <p class="form-tip">AI 请求由后端 PHP 接口转发，DeepSeek Key 与提示词均保存在服务器上，前端不可见。留空则使用默认地址 <b>api/deepseek.php</b>。</p>
+        <input type="text" id="input-endpoint" class="form-input" placeholder="/api/deepseek" />
+        <p class="form-tip">AI 请求由 Node 后端代理转发，DeepSeek Key 与提示词均保存在服务端，前端不可见。留空则使用默认地址 <b>/api/deepseek</b>。</p>
         <div class="form-actions">
           <button id="btn-settings-save" class="btn btn-primary">保存</button>
         </div>
@@ -180,12 +244,13 @@
   <!-- ============ Toast ============ -->
   <div id="toast" class="toast"></div>
 
-  <script src="js/config.js?v=16"></script>
-  <script src="js/talents.js?v=16"></script>
-  <script src="js/storage.js?v=16"></script>
-  <script src="js/deepseek.js?v=16"></script>
-  <script src="js/prompts.js?v=16"></script>
-  <script src="js/game.js?v=16"></script>
-  <script src="js/main.js?v=16"></script>
+  <script src="js/config.js?v=18"></script>
+  <script src="js/bazi.js?v=18"></script>
+  <script src="js/talents.js?v=18"></script>
+  <script src="js/storage.js?v=18"></script>
+  <script src="js/deepseek.js?v=18"></script>
+  <script src="js/prompts.js?v=18"></script>
+  <script src="js/game.js?v=18"></script>
+  <script src="js/main.js?v=18"></script>
 </body>
 </html>

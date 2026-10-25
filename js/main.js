@@ -78,9 +78,14 @@
       row.style.cursor = 'pointer';
       row.addEventListener('click', () => {
         const m = ATTR_META.find(a => a.key === row.dataset.key);
-        const v = Game.getState() ? Game.getState().attrs[m.key] : null;
+        const s = Game.getState();
+        const v = s ? s.attrs[m.key] : null;
         const valText = v == null ? '' : `（当前 ${m.key === 'wealth' ? wealthToMoney(v) : v}）`;
-        toast(`${m.icon} ${m.name}${valText}：${ATTR_TIPS[m.key]}`);
+        // 资产额外说明"同时代观感"与年代购买力
+        const eraNote = (m.key === 'wealth' && v != null)
+          ? '——同时代观感「' + wealthView(s).label + '」：' + wealthView(s).note
+          : '';
+        toast(`${m.icon} ${m.name}${valText}：${ATTR_TIPS[m.key]}${eraNote}`);
       });
     });
   }
@@ -97,6 +102,12 @@
     $('hud-stage').textContent = s.stage;
   }
 
+  // 当前资产的"同时代观感"（按出生年代衡量这笔钱的分量）
+  function wealthView(s) {
+    const year = (s && s.birth && s.birth.year) ? s.birth.year : null;
+    return Bazi.wealthTier(year, s.attrs.wealth);
+  }
+
   function renderBars(s, deltas) {
     ATTR_META.forEach(m => {
       const row = document.querySelector('.bar-row[data-key="' + m.key + '"]');
@@ -104,7 +115,9 @@
       // 资产数值直接以 W（万）显示，如 "85W"
       row.querySelector('.bar-val').textContent = m.key === 'wealth' ? wealthToMoney(v) : v;
       const moneyEl = row.querySelector('.bar-money');
-      moneyEl.textContent = '';
+      // 资产条常驻显示同时代档位（如 "· 殷实"），让 60 年代的"小富"和当代的"小富"一眼可辨
+      moneyEl.textContent = m.key === 'wealth' ? ('· ' + wealthView(s).label) : '';
+      if (m.key === 'wealth') row.title = '¥ 资产（当前 ' + wealthToMoney(v) + '）：' + wealthView(s).note;
       row.querySelector('.bar-fill').style.width = Math.min(100, v) + '%'; // 资产无上限，条宽封顶100%
       row.querySelector('.attr-dot').textContent = m.key === 'wealth' ? wealthToMoney(v) : v;
       const dEl = row.querySelector('.bar-delta');
@@ -259,18 +272,137 @@
     $('btn-continue-life').addEventListener('click', onContinue);
   }
 
+  /* ---------------- 生辰表单（开局屏） ---------------- */
+  // 时辰下拉项：空值 = 时辰不详
+  const HOUR_OPTIONS = [
+    { v: '', label: '时辰不详' },
+    { v: 0, label: '子时 23:00-01:00' },
+    { v: 1, label: '丑时 01:00-03:00' },
+    { v: 3, label: '寅时 03:00-05:00' },
+    { v: 5, label: '卯时 05:00-07:00' },
+    { v: 7, label: '辰时 07:00-09:00' },
+    { v: 9, label: '巳时 09:00-11:00' },
+    { v: 11, label: '午时 11:00-13:00' },
+    { v: 13, label: '未时 13:00-15:00' },
+    { v: 15, label: '申时 15:00-17:00' },
+    { v: 17, label: '酉时 17:00-19:00' },
+    { v: 19, label: '戌时 19:00-21:00' },
+    { v: 21, label: '亥时 21:00-23:00' }
+  ];
+  const PILLAR_LABELS = { year: '年柱', month: '月柱', day: '日柱', hour: '时柱' };
+
+  function daysInMonth(y, m) { return new Date(y, m, 0).getDate(); }
+
+  function initBirthForm() {
+    const yEl = $('bf-year'), mEl = $('bf-month'), dEl = $('bf-day'), hEl = $('bf-hour');
+
+    for (let m = 1; m <= 12; m++) {
+      mEl.insertAdjacentHTML('beforeend', `<option value="${m}">${m} 月</option>`);
+    }
+    mEl.value = '6';
+
+    function rebuildDays() {
+      const y = parseInt(yEl.value, 10) || 1990;
+      const m = parseInt(mEl.value, 10) || 6;
+      const n = daysInMonth(y, m);
+      const cur = parseInt(dEl.value, 10) || 15;
+      dEl.innerHTML = '';
+      for (let d = 1; d <= n; d++) {
+        dEl.insertAdjacentHTML('beforeend', `<option value="${d}">${d} 日</option>`);
+      }
+      dEl.value = String(Math.min(cur, n));
+    }
+    yEl.addEventListener('input', rebuildDays);
+    mEl.addEventListener('change', rebuildDays);
+    rebuildDays();
+    dEl.value = '15';
+
+    HOUR_OPTIONS.forEach(o => {
+      hEl.insertAdjacentHTML('beforeend', `<option value="${o.v}">${o.label}</option>`);
+    });
+    hEl.value = '';
+
+    // 性别分段按钮
+    const genderBox = $('bf-gender');
+    genderBox.querySelectorAll('button').forEach(b => {
+      b.addEventListener('click', () => {
+        genderBox.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+        b.classList.add('on');
+      });
+    });
+
+    // 输入即时刷新排盘预览
+    [yEl, mEl, dEl, hEl].forEach(el => {
+      el.addEventListener('input', updateBaziPreview);
+      el.addEventListener('change', updateBaziPreview);
+    });
+    updateBaziPreview();
+  }
+
+  // 读取并校验生辰表单
+  function readBirthForm() {
+    const y = parseInt($('bf-year').value, 10);
+    const m = parseInt($('bf-month').value, 10);
+    const d = parseInt($('bf-day').value, 10);
+    const hRaw = $('bf-hour').value;
+    const hour = hRaw === '' ? null : parseInt(hRaw, 10);
+    const genderBtn = document.querySelector('#bf-gender button.on');
+    const gender = genderBtn ? genderBtn.dataset.v : '随机';
+    if (!isFinite(y) || y < 1949 || y > 2026) return { error: '出生年份需在 1949 - 2026 之间' };
+    if (!isFinite(m) || m < 1 || m > 12) return { error: '出生月份不合法' };
+    if (!isFinite(d) || d < 1 || d > daysInMonth(y, m)) return { error: '该月没有 ' + d + ' 日，请检查出生日期' };
+    return { year: y, month: m, day: d, hour: hour, gender: gender };
+  }
+
+  // 实时排盘预览：四柱 / 日主 / 五行 / 时代背景
+  function updateBaziPreview() {
+    const info = readBirthForm();
+    const errEl = $('birth-error');
+    if (info.error) {
+      errEl.textContent = info.error;
+      return;
+    }
+    errEl.textContent = '';
+    const b = Bazi.computeBazi(info.year, info.month, info.day, info.hour);
+    const era = Bazi.eraFor(info.year);
+    $('bazi-pillars').innerHTML = ['year', 'month', 'day', 'hour'].map(k =>
+      `<div class="bazi-pillar"><span class="bp-label">${PILLAR_LABELS[k]}</span><span class="bp-val">${escapeHtml(b.pillars[k])}</span></div>`
+    ).join('');
+    $('bazi-meta').innerHTML = '日主 <b>' + escapeHtml(b.dayMaster) + '</b>（' + escapeHtml(b.dayMasterNature) + '） · ' + escapeHtml(b.wuxingText);
+    $('bazi-era').innerHTML = '<b>' + escapeHtml(era.label) + '</b>（' + era.from + '-' + era.to + '）<p>' + escapeHtml(era.backdrop) + '</p>'
+      + '<p>年代购买力：' + escapeHtml(Bazi.purchaseFor(info.year).anchor) + '</p>';
+  }
+
+  // 上报生辰到服务端 data/ 目录（异步，失败静默，不影响游戏）
+  function reportBazi(info) {
+    if (!info || info.error || !window.fetch) return;
+    try {
+      fetch('/api/bazi', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          year: info.year, month: info.month, day: info.day,
+          hour: info.hour, gender: info.gender
+        })
+      }).catch(() => { /* 记录失败不打扰玩家 */ });
+    } catch (_) { /* ignore */ }
+  }
+
   /* ---------------- 流程控制 ---------------- */
   async function startNewLife() {
     if (busy) return;
+    const info = readBirthForm();
+    if (info.error) { toast(info.error, 'error'); return; }
     busy = true;
     loading(true, '一个新生命即将降临……');
     try {
-      const s = await Game.newLife((t) => loading(true, t));
+      const s = await Game.newLife(info, (t) => loading(true, t));
       showScreen('game');
       renderAll(s);
       renderBirth(s);
       StorageX.clearSave();
       updateStartUI();
+      reportBazi(info); // 每次写入生辰开局，服务端落盘记录
     } catch (e) {
       console.error(e);
       toast('开局失败：' + e.message, 'error');
@@ -331,12 +463,22 @@
     $('ending-age').textContent = '享年 ' + s.age + ' 岁';
     $('ending-gender').textContent = s.gender;
     $('ending-tier').textContent = Prompts.endingTier(s).label;
+    // 出生年代（老存档无生辰信息时留空）
+    $('ending-era').textContent = (s.birth && s.birth.year)
+      ? '生于 ' + s.birth.year + ' · ' + s.birth.era.label
+      : '';
+    $('ending-era-dot').style.display = (s.birth && s.birth.year) ? '' : 'none';
     $('ending-summary').textContent = end.summary;
     $('ending-evaluation').textContent = end.evaluation;
     $('ending-highlights').innerHTML = end.highlights.map(h =>
       `<li>${escapeHtml(h)}</li>`).join('');
-    $('ending-attrs').innerHTML = ATTR_META.map(m =>
-      `<span class="ending-attr">${m.icon} ${m.name}<b>${m.key === 'wealth' ? wealthToMoney(s.attrs[m.key]) : s.attrs[m.key]}</b></span>`).join('');
+    $('ending-attrs').innerHTML = ATTR_META.map(m => {
+      // 资产附带同时代档位（如 "85W · 殷实"）
+      const val = m.key === 'wealth'
+        ? wealthToMoney(s.attrs[m.key]) + ' · ' + wealthView(s).label
+        : s.attrs[m.key];
+      return `<span class="ending-attr">${m.icon} ${m.name}<b>${val}</b></span>`;
+    }).join('');
     showScreen('ending');
   }
 
@@ -389,14 +531,20 @@
           <div style="text-align:center;margin:14px 0 6px">
             <div class="ending-eyebrow" style="letter-spacing:4px">结局</div>
             <h2 style="font-family:var(--serif);font-size:30px;color:var(--gold-soft);letter-spacing:4px;margin-top:6px">${escapeHtml(rec.endingTitle)}</h2>
-            <div class="ending-meta" style="margin-top:8px">${rec.age} 岁 · ${escapeHtml(rec.gender)} · ${escapeHtml(rec.tier)} · ${escapeHtml(rec.cause || '')}</div>
+            <div class="ending-meta" style="margin-top:8px">${rec.age} 岁 · ${escapeHtml(rec.gender)} · ${escapeHtml(rec.tier)} · ${escapeHtml(rec.cause || '')}${rec.era ? ' · 生于 ' + rec.birthYear + '（' + escapeHtml(rec.era) + '）' : ''}</div>
           </div>
           <div class="ending-summary" style="margin:18px 0">${escapeHtml(rec.summary)}</div>
           <div class="ending-eval"><div class="ending-eval-label">一生评价</div><p>${escapeHtml(rec.evaluation)}</p></div>
           <div class="ending-block-label">关键节点</div>
           <ul class="highlight-list">${(rec.highlights || []).map(h => `<li>${escapeHtml(h)}</li>`).join('')}</ul>
-          <div class="ending-attrs" style="margin-top:16px">${ATTR_META.map(m =>
-            `<span class="ending-attr">${m.name}<b>${rec.attrs ? rec.attrs[m.key] : '-'}</b></span>`).join('')}</div>`;
+          <div class="ending-attrs" style="margin-top:16px">${ATTR_META.map(m => {
+            // 资产附带同时代档位（图鉴记录里有 birthYear，老记录缺失则只显示数值）
+            const raw = rec.attrs ? rec.attrs[m.key] : '-';
+            const val = (m.key === 'wealth' && rec.attrs)
+              ? wealthToMoney(rec.attrs[m.key]) + (rec.birthYear ? ' · ' + Bazi.wealthTier(rec.birthYear, rec.attrs[m.key]).label : '')
+              : raw;
+            return `<span class="ending-attr">${m.name}<b>${val}</b></span>`;
+          }).join('')}</div>`;
         $('gallery-back').addEventListener('click', () => { galleryDetailId = null; renderGallery(); });
         return;
       }
@@ -527,6 +675,7 @@
 
   /* ---------------- 启动 ---------------- */
   buildBars();
+  initBirthForm();
   bindEvents();
   updateStartUI();
 })();

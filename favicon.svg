@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#171326" />
+      <stop offset="55%" stop-color="#241a35" />
+      <stop offset="100%" stop-color="#0f0c1a" />
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="42%" r="55%">
+      <stop offset="0%" stop-color="#d9b23f" stop-opacity="0.30" />
+      <stop offset="100%" stop-color="#d9b23f" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f0d580" />
+      <stop offset="100%" stop-color="#c9a227" />
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="96" fill="url(#bg)" />
+  <rect width="512" height="512" rx="96" fill="url(#glow)" />
+  <rect x="18" y="18" width="476" height="476" rx="82" fill="none" stroke="url(#gold)" stroke-width="6" opacity="0.75" />
+
+  <!-- 八字四柱 -->
+  <g fill="url(#gold)" font-family="'Songti SC','STSong','SimSun',serif" font-size="72" text-anchor="middle">
+    <text x="256" y="128" letter-spacing="18">壬 寅</text>
+    <text x="256" y="212" letter-spacing="18">丙 午</text>
+    <text x="256" y="296" letter-spacing="18">甲 申</text>
+    <text x="256" y="380" letter-spacing="18">庚 午</text>
+  </g>
+
+  <!-- 天地人三才的一点朱印 -->
+  <circle cx="256" cy="450" r="14" fill="#c2352c" opacity="0.85" />
+</svg>

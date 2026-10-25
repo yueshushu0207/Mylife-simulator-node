@@ -1,11 +1,13 @@
 /* ============================================================
  * server.js — 人生模拟器 Node 版（零依赖，Node 14+）
  * 职责：
- *  1. 静态托管前端（index.html / styles.css / js/*）
+ *  1. 静态托管前端（index.html / styles.css / js/*），并注入 SEO 元信息
  *  2. POST /api/deepseek —— 游戏 AI 代理：
  *     固定提示词在服务端拼装，DeepSeek Key 只在服务端，
  *     前端永远不接触 Key，也无法篡改系统提示词
- *  3. 每 IP 限流 + 请求体大小限制，防盗刷余额
+ *  3. POST /api/bazi —— 记录生辰信息到 data/ 目录（jsonl / csv / 汇总）
+ *  4. /robots.txt、/sitemap.xml —— SEO 支持
+ *  5. 每 IP 限流 + 请求体大小限制，防盗刷余额
  * ============================================================ */
 'use strict';
 
@@ -14,6 +16,8 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { buildRequest } = require('./prompts');
+const store = require('./store');
+const seo = require('./seo');
 
 /* ---------------- 配置（环境变量 / .env） ---------------- */
 loadEnv(path.join(__dirname, '.env'));
@@ -27,8 +31,13 @@ const AI_TIMEOUT_MS = 90000;       // 单次 AI 请求超时
 const MAX_BODY_BYTES = 256 * 1024; // 前端请求体上限 256KB，防滥用
 const RATE_LIMIT = 30;             // 每 IP 每分钟最多请求次数，防盗刷
 const RATE_WINDOW_MS = 60 * 1000;
+const RECORD_LIMIT = 20;           // 每 IP 每分钟最多提交生辰记录次数
 
 const ALLOWED_KINDS = new Set(['birth', 'event', 'outcome', 'ending']);
+
+// 静态托管黑名单：data 目录存放用户生辰记录，绝不可对外暴露
+const BLOCKED_PREFIX = ['/data/', '/.git/', '/node_modules/', '/.workbuddy/'];
+const BLOCKED_FILES = new Set(['/.env', '/.env.example', '/server.log', '/store.js', '/seo.js', '/prompts.js']);
 
 /* ---------------- 简单 .env 解析（零依赖） ---------------- */
 function loadEnv(file) {
@@ -44,7 +53,8 @@ function loadEnv(file) {
 
 /* ---------------- 内存限流：每 IP 每分钟 N 次 ---------------- */
 const rateBuckets = new Map(); // ip -> { start, count }
-function rateLimited(ip) {
+function rateLimited(ip, limit) {
+  const max = limit || RATE_LIMIT;
   const now = Date.now();
   let b = rateBuckets.get(ip);
   if (!b || now - b.start >= RATE_WINDOW_MS) {
@@ -53,7 +63,7 @@ function rateLimited(ip) {
   }
   b.count++;
   if (rateBuckets.size > 5000) rateBuckets.clear(); // 防内存膨胀
-  return b.count > RATE_LIMIT;
+  return b.count > max;
 }
 
 /* ---------------- 静态文件 ---------------- */
@@ -62,31 +72,71 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.jsonl': 'text/plain; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon', '.woff2': 'font/woff2'
 };
 
+// 统一安全响应头
+function baseHeaders(extra) {
+  return Object.assign({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN',
+    'Referrer-Policy': 'strict-origin-when-cross-origin'
+  }, extra || {});
+}
+
 function serveStatic(req, res) {
   let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
   if (urlPath === '/') urlPath = '/index.html';
+  const lower = urlPath.toLowerCase();
+  if (BLOCKED_FILES.has(lower) || BLOCKED_PREFIX.some(p => lower.startsWith(p))) {
+    return send(res, 403, { error: '禁止访问' });
+  }
   const file = path.normalize(path.join(__dirname, urlPath));
   if (!file.startsWith(__dirname) || urlPath.includes('..')) {
     return send(res, 403, { error: '禁止访问' });
   }
   fs.readFile(file, (err, data) => {
     if (err) return send(res, 404, { error: '文件不存在' });
-    res.writeHead(200, {
+    // 首页：注入 SEO 元信息（title/keywords/OG/JSON-LD 等）
+    if (lower === '/index.html') {
+      try {
+        let html = data.toString('utf8');
+        const MARK = '<!--SEO_META-->';
+        if (html.indexOf(MARK) >= 0) {
+          // 剔除静态兜底段，避免与注入内容重复：title / description / keywords 各出现两次
+          html = html.replace(/<!--STATIC_SEO-->[\s\S]*?<!--\/STATIC_SEO-->/, '');
+          data = Buffer.from(html.replace(MARK, seo.META_HTML), 'utf8');
+        }
+      } catch (_) { /* 注入失败则原样返回 */ }
+    }
+    res.writeHead(200, baseHeaders({
       'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
       'Cache-Control': 'no-cache'
-    });
+    }));
     res.end(data);
   });
 }
 
+/* ---------------- SEO 路由 ---------------- */
+function serveRobots(req, res) {
+  res.writeHead(200, baseHeaders({ 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' }));
+  res.end(seo.robotsTxt());
+}
+
+function serveSitemap(req, res) {
+  res.writeHead(200, baseHeaders({ 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-cache' }));
+  res.end(seo.sitemapXml());
+}
+
 /* ---------------- 响应工具 ---------------- */
 function send(res, code, obj) {
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff' });
+  res.writeHead(code, baseHeaders({ 'Content-Type': 'application/json; charset=utf-8' }));
   res.end(JSON.stringify(obj));
 }
 
@@ -163,6 +213,31 @@ async function handleAI(req, res) {
   }
 }
 
+/* ---------------- 生辰（八字）记录 ----------------
+ * 每次玩家写入生辰开局时上报，服务端重算八字后落盘到 data/ 目录。
+ * 注意：不记录 IP / UA 等隐私信息。
+ * ------------------------------------------------ */
+async function handleBaziRecord(req, res) {
+  const ip = req.socket.remoteAddress || 'unknown';
+  if (rateLimited(ip, RECORD_LIMIT)) return send(res, 429, { error: '提交过于频繁，请稍后再试' });
+
+  let body;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch (e) {
+    return send(res, 400, { error: '请求体不是合法 JSON' });
+  }
+  if (!body || typeof body !== 'object') return send(res, 400, { error: '请求内容不合法' });
+
+  const result = await store.saveBaziRecord({
+    year: body.year, month: body.month, day: body.day,
+    hour: body.hour === '' ? null : body.hour, gender: body.gender
+  });
+
+  if (!result.ok) return send(res, 400, { error: result.error || '记录失败' });
+  send(res, 200, { ok: true, id: result.id, total: result.total, era: result.era, pillars: result.pillars });
+}
+
 /* ---------------- HTTPS POST（Node 14+ 通用，零依赖） ---------------- */
 function postJSON(url, payload, headers) {
   return new Promise((resolve, reject) => {
@@ -196,15 +271,24 @@ function postJSON(url, payload, headers) {
 
 /* ---------------- 入口 ---------------- */
 const server = http.createServer((req, res) => {
-  if (req.method === 'POST' && req.url && req.url.split('?')[0] === '/api/deepseek') {
+  const pathname = (req.url || '/').split('?')[0];
+
+  if (req.method === 'POST' && pathname === '/api/deepseek') {
     handleAI(req, res).catch(e => send(res, 500, { error: '服务器内部错误：' + e.message }));
     return;
   }
+  if (req.method === 'POST' && pathname === '/api/bazi') {
+    handleBaziRecord(req, res).catch(e => send(res, 500, { error: '服务器内部错误：' + e.message }));
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/robots.txt') return serveRobots(req, res);
+  if (req.method === 'GET' && pathname === '/sitemap.xml') return serveSitemap(req, res);
   if (req.method === 'GET') return serveStatic(req, res);
   send(res, 405, { error: '方法不允许' });
 });
 
 server.listen(PORT, () => {
   console.log(`人生模拟器（Node 版）已启动: http://localhost:${PORT}`);
+  console.log(`出品：${seo.SITE.brand} · 作者：${seo.SITE.author} · 生辰记录目录：${store.DATA_DIR}`);
   if (!API_KEY) console.warn('警告：未配置 DEEPSEEK_API_KEY，AI 功能不可用（可在 .env 中配置）');
 });

@@ -1,5 +1,10 @@
 /* ============================================================
  * talents.js — 出生天赋池 & 新角色随机生成
+ * 生辰时代化改造：
+ *  - 性别由玩家填写（可选"随机"）
+ *  - 初始家境 / 健康 / 寿命按出生年代系数缩放（60 年代 1 万是巨款）
+ *  - 八字五行偏枯 → 七维初始属性微调（±3 内）
+ *  - 完整生辰记录（四柱/日主/五行/时代背景）随 state.birth 流转
  * ============================================================ */
 (function (global) {
   'use strict';
@@ -107,28 +112,76 @@
     return result;
   }
 
-  // 家境分层（wealth 数值直接以"万"为单位）
-  function familyTier(wealth) {
-    if (wealth >= 200) return { level: '富裕', desc: '家境优渥，衣食无忧，父母能提供优质教育资源' };
-    if (wealth >= 60)  return { level: '小康', desc: '家境殷实安稳，有房有存款，生活体面' };
-    if (wealth >= 20)  return { level: '普通', desc: '普通工薪/务农家庭，家境一般，凡事需自己努力' };
-    if (wealth >= 8)   return { level: '拮据', desc: '家境拮据，父母为生计奔波，用钱常需精打细算' };
-    return { level: '贫困', desc: '一贫如洗，负债或低保边缘，童年早早尝到生活的苦' };
+  /* 时代经济与医疗系数
+   * base/rich/poor：各时代普通/富贵/寒门家境的初始资产区间（单位：万）
+   * health：初始健康修正（早年医疗条件差）；life：寿命修正（早年人均寿命低）
+   */
+  const ERA_ECON = [
+    { from: 1949, to: 1979, base: [1, 16],   rich: [25, 100],  poor: [1, 6],   health: -4, life: -3 },
+    { from: 1980, to: 1999, base: [6, 60],   rich: [60, 260],  poor: [2, 10],  health: 0,  life: 0 },
+    { from: 2000, to: 2009, base: [12, 130], rich: [150, 500], poor: [3, 14],  health: 2,  life: 2 },
+    { from: 2010, to: 2035, base: [20, 240], rich: [200, 800], poor: [3, 16],  health: 4,  life: 4 }
+  ];
+
+  function eraEcon(year) {
+    if (year == null) return ERA_ECON[ERA_ECON.length - 1];
+    return ERA_ECON.find(e => year >= e.from && year <= e.to) || ERA_ECON[ERA_ECON.length - 1];
   }
 
-  /* 生成一个新角色的初始状态（不含剧情，剧情由 AI 生成） */
-  function createCharacter() {
-    const gender = Math.random() < 0.51 ? '男' : '女';
+  /* 八字五行 → 七维属性映射（民间五行性理）
+   * 木主仁（生发）→ 学识/品德；火主礼（热情）→ 情感/运气；
+   * 土主信（厚重）→ 社会/健康；金主义（刚健）→ 资产/品德；
+   * 水主智（润下）→ 学识/情感
+   */
+  const WUXING_ATTRS = {
+    '木': ['knowledge', 'morality'],
+    '火': ['emotion', 'luck'],
+    '土': ['social', 'health'],
+    '金': ['wealth', 'morality'],
+    '水': ['knowledge', 'emotion']
+  };
+
+  // 五行偏枯修正：某元素 0 个给 -2，≥3 个给 +2 左右，影响幅度 ±3 以内
+  function applyWuxingBias(attrs, wuxing) {
+    if (!wuxing) return;
+    Object.keys(WUXING_ATTRS).forEach(el => {
+      const c = wuxing[el] || 0;
+      const bias = Math.max(-3, Math.min(3, Math.round((c - 1.5) * 1.2)));
+      if (!bias) return;
+      WUXING_ATTRS[el].forEach(k => {
+        attrs[k] = (k === 'wealth') ? Math.max(0, attrs[k] + bias) : clamp(attrs[k] + bias);
+      });
+    });
+  }
+
+  // 家境分层：同一笔钱按出生年代衡量分量（1960 年代 8 万是殷实人家，2010 年代只是温饱）
+  function familyTier(wealth, year) {
+    const t = Bazi.wealthTier(year, wealth);
+    return { level: t.label, desc: t.desc };
+  }
+
+  /* 生成一个新角色的初始状态（不含剧情，剧情由 AI 生成）
+   * origin: { year, month, day, hour, gender } —— 玩家填写的生辰信息
+   */
+  function createCharacter(origin) {
+    origin = origin || {};
+    const year = origin.year || null;
+    // 性别：玩家指定，或"随机"
+    const gender = (origin.gender && origin.gender !== '随机')
+      ? origin.gender
+      : (Math.random() < 0.51 ? '男' : '女');
+
     const talents = rollTalents();
     const familyTalent = talents.find(t => t.family);
+    const econ = eraEcon(year);
 
-    let wealth; // 单位：万（W）
-    if (familyTalent && familyTalent.family === 'rich') wealth = rand(200, 600);
-    else if (familyTalent && familyTalent.family === 'poor') wealth = rand(3, 16);
-    else wealth = rand(20, 120);
+    let wealth; // 单位：万（W），按时代系数缩放
+    if (familyTalent && familyTalent.family === 'rich') wealth = rand(econ.rich[0], econ.rich[1]);
+    else if (familyTalent && familyTalent.family === 'poor') wealth = rand(econ.poor[0], econ.poor[1]);
+    else wealth = rand(econ.base[0], econ.base[1]);
 
     const attrs = {
-      health:    clamp(rand(74, 96) + (talents.some(t => t.id === 'sickly') ? -15 : 0) + (talents.some(t => t.id === 'strong') ? 5 : 0)),
+      health:    clamp(rand(74, 96) + (talents.some(t => t.id === 'sickly') ? -15 : 0) + (talents.some(t => t.id === 'strong') ? 5 : 0) + econ.health),
       emotion:   clamp(rand(58, 82)),
       social:    clamp(rand(35, 62)),
       wealth:    Math.max(0, wealth), // 资产无上限，单位万
@@ -146,11 +199,35 @@
       }
     });
 
-    // 寿命：50-100 三角分布（均值约 75），受初始健康与天赋微调
+    // 八字五行偏枯 → 七维微调
+    let birth = null;
+    if (year && origin.month && origin.day) {
+      const bazi = Bazi.computeBazi(year, origin.month, origin.day,
+        origin.hour == null ? null : origin.hour);
+      applyWuxingBias(attrs, bazi.wuxing);
+      birth = {
+        year: year,
+        month: origin.month,
+        day: origin.day,
+        hour: origin.hour == null ? null : origin.hour,
+        hourLabel: bazi.hourLabel,
+        gender: gender,
+        bazi: bazi.pillars,
+        dayMaster: bazi.dayMaster,
+        dayMasterWuxing: bazi.dayMasterWuxing,
+        dayMasterNature: bazi.dayMasterNature,
+        wuxing: bazi.wuxing,
+        wuxingText: bazi.wuxingText,
+        era: Bazi.eraFor(year)
+      };
+    }
+
+    // 寿命：50-100 三角分布（均值约 75），受初始健康、天赋与时代医疗水平微调
     let lifespan = 50 + rand(0, 25) + rand(0, 25);
     lifespan += Math.round((attrs.health - 80) * 0.2);
     if (talents.some(t => t.id === 'strong')) lifespan += rand(2, 5);
     if (talents.some(t => t.id === 'sickly')) lifespan -= rand(2, 6);
+    lifespan += econ.life;
     lifespan = Math.max(50, Math.min(100, lifespan));
 
     return {
@@ -158,7 +235,8 @@
       talents: talents.map(t => ({ id: t.id, tier: t.tier, name: t.name, desc: t.desc })),
       attrs,
       lifespan,
-      family: familyTier(attrs.wealth)
+      family: familyTier(attrs.wealth, year),
+      birth: birth
     };
   }
 
