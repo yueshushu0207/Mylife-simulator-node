@@ -46,6 +46,8 @@
       attrs: ch.attrs,
       lifespan: ch.lifespan,
       family: ch.family,
+      familyJob: ch.familyJob || null,
+      region: ch.region || null,
       birth: ch.birth || null,
       peak: mapAttrs(ch.attrs),
       trough: mapAttrs(ch.attrs),
@@ -379,11 +381,15 @@
     const tNames = state.talents.map(t => '「' + t.name + '」').join('、');
     const era = state.birth ? state.birth.era : null;
     const eraLine = era ? ('那是' + era.label + '的年月：' + era.backdrop + '。') : '';
+    const job = state.familyJob;
+    const jobLine = job ? ('家里靠' + job.name + '维生——' + (job.note || '') + '。') : '';
+    const region = state.region;
+    const regionLine = region ? ('你生在' + region.name + '——' + (region.note || '') + '。') : '';
     return {
       title: '降生',
       description:
         '你降生在一个' + state.family.level + '的家庭里。' + state.family.desc +
-        '。' + eraLine + '接生的人把你裹进襁褓，你用响亮的哭声回应这个陌生的世界。家人们很快发现，这孩子似乎有些与众不同——' +
+        '。' + jobLine + regionLine + eraLine + '接生的人把你裹进襁褓，你用响亮的哭声回应这个陌生的世界。家人们很快发现，这孩子似乎有些与众不同——' +
         tNames + '，命运的伏笔已在襁褓中悄悄埋下。属于你的一生，就这样开始了。'
     };
   }
@@ -881,9 +887,11 @@
   function fallbackEnding(s, deathInfo) {
     const tier = Prompts.endingTier(s);
     const keyEvents = s.history.filter(h => h.type === 'event').slice(-6).map(h => h.age + '岁「' + h.title + '」');
+    const jobTail = (s.familyJob && s.familyJob.name) ? '、' + s.familyJob.name + '人家' : '';
+    const regionTail = (s.region && s.region.name) ? '，老家' + s.region.name : '';
     const bornLine = (s.birth && s.birth.year)
-      ? '生于 ' + s.birth.year + ' 年（' + s.birth.era.label + '）的' + s.family.level + '之家'
-      : '生于' + s.family.level + '之家';
+      ? '生于 ' + s.birth.year + ' 年（' + s.birth.era.label + '）的' + s.family.level + '之家' + jobTail + regionTail
+      : '生于' + s.family.level + '之家' + jobTail + regionTail;
     return {
       ending_title: deathInfo.kind === 'natural' ? '寿终正寝' : (s.age < 50 ? '英年早逝' : '一生落幕'),
       summary:

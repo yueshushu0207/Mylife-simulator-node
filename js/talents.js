@@ -128,6 +128,146 @@
     return ERA_ECON.find(e => year >= e.from && year <= e.to) || ERA_ECON[ERA_ECON.length - 1];
   }
 
+  /* 家庭行业定位（玩家可选，也可随机）
+   * 不同年代同一行业境遇迥异：
+   *  - 工人 50-70 年代是"老大哥"备受尊崇，90 年代却撞上下岗潮；
+   *  - 商人 60-70 年代做买卖要谨小慎微，80 年代后才是万元户风向标；
+   *  - 农民 2000 年代后大批进城务工，早已不只是土里刨食。
+   * mul：对初始家庭资产（万）的年代乘数；attrs：初始属性微调；note：该年代下的行业注脚
+   */
+  const FAMILY_JOBS = [
+    {
+      id: 'farm', name: '农民', note: '土里刨食、靠天吃饭',
+      bands: [ { from: 1949, to: 2035, mul: 0.55, attrs: { health: 4, morality: 3, social: -4 } } ]
+    },
+    {
+      id: 'worker', name: '工人', note: '厂子里拿工资的人',
+      bands: [
+        { from: 1949, to: 1979, mul: 1.15, note: '工人老大哥，铁饭碗令人艳羡', attrs: { social: 8 } },
+        { from: 1980, to: 1999, mul: 0.95, note: '厂子效益一年不如一年，下岗风声越来越紧', attrs: { social: 4 } },
+        { from: 2000, to: 2035, mul: 1.0, note: '在工厂或企业上班，拿工资吃饭', attrs: {} }
+      ]
+    },
+    {
+      id: 'merchant', name: '商人', note: '做买卖、跑生意',
+      bands: [
+        { from: 1949, to: 1979, mul: 0.65, note: '做点小买卖谨小慎微，生怕被说成投机倒把', attrs: { social: -8, luck: 4 } },
+        { from: 1980, to: 2035, mul: 1.8, note: '改革开放后下海经商，风生水起', attrs: { social: 6 } }
+      ]
+    },
+    {
+      id: 'teacher', name: '教师', note: '教书育人、书香门第',
+      bands: [ { from: 1949, to: 2035, mul: 1.0, note: '在教书育人的行当里，家里有点书卷气', attrs: { knowledge: 10, morality: 4, social: 3 } } ]
+    },
+    {
+      id: 'civil', name: '公务员', note: '体制内的稳定人家',
+      bands: [
+        { from: 1949, to: 1979, mul: 1.2, note: '在机关单位上班，街坊眼里体面人家', attrs: { social: 8, morality: 3 } },
+        { from: 1980, to: 2035, mul: 1.25, note: '体制内旱涝保收，稳定体面', attrs: { social: 6 } }
+      ]
+    },
+    {
+      id: 'military', name: '军人', note: '军旅人家、令行禁止',
+      bands: [ { from: 1949, to: 2035, mul: 1.0, note: '军旅出身，家里规矩大、作风硬朗', attrs: { health: 6, morality: 5, social: 2 } } ]
+    },
+    {
+      id: 'doctor', name: '医生', note: '悬壶济世、医学世家',
+      bands: [ { from: 1949, to: 2035, mul: 1.1, note: '在医院或卫生院做事，街坊都敬三分', attrs: { knowledge: 9, social: 4 } } ]
+    },
+    {
+      id: 'craft', name: '手艺人', note: '一门手艺走天下',
+      bands: [
+        { from: 1949, to: 1979, mul: 0.8, note: '凭一门手艺挣工分之外的手艺钱', attrs: { social: -3, knowledge: 3 } },
+        { from: 1980, to: 2035, mul: 1.15, note: '手艺吃香，活儿接到手软', attrs: { social: 2, knowledge: 3 } }
+      ]
+    }
+  ];
+
+  // 按玩家选择（或随机）确定家庭行业
+  function resolveFamilyJob(chosen) {
+    const pool = FAMILY_JOBS; // 全部为可选行业，"随机"由调用方处理
+    const hit = chosen && pool.find(j => j.name === chosen);
+    return hit || pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  // 取该行业在指定出生年代的境遇带（资产乘数 / 属性微调 / 年代注脚）
+  function jobBand(job, year) {
+    const bands = job.bands || [];
+    const hit = bands.find(b => year == null || (year >= b.from && year <= b.to));
+    return hit || bands[bands.length - 1] || { mul: 1, attrs: {}, note: job.note };
+  }
+
+  /* 出生地区（省级行政区）定位（玩家可选，也可随机）
+   * 不同地区家境水平与资源禀赋差异明显，且随年代变化：
+   *  - 北京/上海在票证年代就比别处见世面，改革开放后更是一线都市；
+   *  - 东北 80 年代前是"共和国长子"工业重镇，90 年代撞上下岗潮；
+   *  - 沿海省份 80 年代后得改革开放风气之先。
+   * 注意：地区只是「出生地的地理与家境背景」，不预设初生者成年后去往何处、做什么。
+   * mul：对初始家庭资产（万）的年代乘数；attrs：初始属性微调；note：该年代下的地区注脚
+   */
+  const REGION_GROUPS = [
+    { names: ['北京', '上海'],
+      bands: [
+        { from: 1949, to: 1979, mul: 1.15, note: '大城市人家，票证年代里也算见世面', attrs: { knowledge: 6, social: 4, health: -2 } },
+        { from: 1980, to: 2035, mul: 1.5, note: '一线都市，机会与眼界都是顶配', attrs: { knowledge: 6, social: 5, health: -2 } }
+      ] },
+    { names: ['天津', '重庆'],
+      bands: [
+        { from: 1949, to: 1979, mul: 1.05, note: '大城市里的人家，日子不算差', attrs: { knowledge: 4, social: 3 } },
+        { from: 1980, to: 2035, mul: 1.25, note: '直辖市人家，城市建设红利赶上了', attrs: { knowledge: 4, social: 4 } }
+      ] },
+    { names: ['广东', '江苏', '浙江', '福建', '海南'],
+      bands: [
+        { from: 1949, to: 1979, mul: 1.0, note: '靠山吃山、靠海吃海，日子精打细算', attrs: { morality: 2 } },
+        { from: 1980, to: 2035, mul: 1.35, note: '改革开放前沿，遍地是机会', attrs: { social: 5, knowledge: 3 } }
+      ] },
+    { names: ['山东', '河南'],
+      bands: [
+        { from: 1949, to: 1979, mul: 0.9, note: '农业大省，人口多、土地厚，日子紧巴却踏实', attrs: { health: 3, morality: 3 } },
+        { from: 1980, to: 2035, mul: 0.95, note: '人口大省、高考大省，读书竞争激烈', attrs: { knowledge: 3, morality: 3, health: 2 } }
+      ] },
+    { names: ['黑龙江', '吉林', '辽宁'],
+      bands: [
+        { from: 1949, to: 1989, mul: 1.15, note: '共和国长子，工厂林立，工人地位高', attrs: { social: 5, health: 2 } },
+        { from: 1990, to: 2035, mul: 0.9, note: '老工业基地转型，不少人家经历下岗再就业', attrs: { social: 2, health: 2 } }
+      ] },
+    { names: ['河北', '山西', '湖北', '湖南', '安徽', '江西'],
+      bands: [
+        { from: 1949, to: 1979, mul: 0.9, note: '中原腹地、鱼米之乡，日子清苦却有奔头', attrs: { morality: 2 } },
+        { from: 1980, to: 2035, mul: 1.0, note: '中部崛起，进城务工与返乡创业交织', attrs: { morality: 2, social: 2 } }
+      ] },
+    { names: ['陕西', '甘肃', '青海', '宁夏', '新疆', '西藏', '云南', '贵州', '四川', '广西', '内蒙古'],
+      bands: [
+        { from: 1949, to: 1979, mul: 0.8, note: '地广人稀，日子清苦但天高地阔', attrs: { health: 4, morality: 3 } },
+        { from: 1980, to: 2035, mul: 0.85, note: '西部大开发，山川壮美、日子渐好', attrs: { health: 4, morality: 3 } }
+      ] },
+    { names: ['中国香港', '中国澳门'],
+      bands: [
+        { from: 1949, to: 1979, mul: 2.2, note: '繁华码头，寸土寸金', attrs: { social: 6, knowledge: 3 } },
+        { from: 1980, to: 2035, mul: 2.0, note: '国际都会，节奏快机会也多', attrs: { social: 6, knowledge: 3 } }
+      ] },
+    { names: ['中国台湾'],
+      bands: [
+        { from: 1949, to: 1979, mul: 1.6, note: '海岛人家，市井烟火气足', attrs: { social: 4, knowledge: 3 } },
+        { from: 1980, to: 2035, mul: 1.5, note: '经济起飞后的宝岛人家', attrs: { social: 4, knowledge: 3 } }
+      ] }
+  ];
+  const REGIONS = [];
+  REGION_GROUPS.forEach(g => g.names.forEach(n => REGIONS.push({ name: n, bands: g.bands })));
+
+  // 按玩家选择（或随机）确定出生地区
+  function resolveRegion(chosen) {
+    const hit = chosen && REGIONS.find(r => r.name === chosen);
+    return hit || REGIONS[Math.floor(Math.random() * REGIONS.length)];
+  }
+
+  // 取该地区在指定出生年代的境遇带（资产乘数 / 属性微调 / 年代注脚）
+  function regionBand(region, year) {
+    const bands = region.bands || [];
+    const hit = bands.find(b => year == null || (year >= b.from && year <= b.to));
+    return hit || bands[bands.length - 1] || { mul: 1, attrs: {}, note: '' };
+  }
+
   /* 八字五行 → 七维属性映射（民间五行性理）
    * 木主仁（生发）→ 学识/品德；火主礼（热情）→ 情感/运气；
    * 土主信（厚重）→ 社会/健康；金主义（刚健）→ 资产/品德；
@@ -180,6 +320,16 @@
     else if (familyTalent && familyTalent.family === 'poor') wealth = rand(econ.poor[0], econ.poor[1]);
     else wealth = rand(econ.base[0], econ.base[1]);
 
+    // 家庭行业：按玩家选择（或随机）确定，并按出生年代调整家境与初始属性
+    const job = resolveFamilyJob(origin.familyJob);
+    const band = jobBand(job, year);
+    // 出生地区：按玩家选择（或随机）确定，与家庭行业共同决定家境乘数
+    const regionHit = resolveRegion(origin.region);
+    const rBand = regionBand(regionHit, year);
+    wealth = Math.max(1, Math.round(wealth * (band.mul || 1) * (rBand.mul || 1)));
+    const familyJob = { name: job.name, note: band.note || job.note };
+    const region = { name: regionHit.name, note: rBand.note || '' };
+
     const attrs = {
       health:    clamp(rand(74, 96) + (talents.some(t => t.id === 'sickly') ? -15 : 0) + (talents.some(t => t.id === 'strong') ? 5 : 0) + econ.health),
       emotion:   clamp(rand(58, 82)),
@@ -189,6 +339,14 @@
       morality:  clamp(rand(52, 72)),
       luck:      clamp(rand(35, 72) + (talents.some(t => t.id === 'lucky') ? 12 : 0))
     };
+
+    // 家庭行业 + 出生地区带来的初始属性微调（如 军人家庭 健康+、教师家庭 学识+、京沪眼界+）
+    [band.attrs, rBand.attrs].forEach(src => {
+      Object.keys(src || {}).forEach(k => {
+        if (!(k in attrs) || k === 'wealth') return; // 资产已由 mul 调整，不走点数
+        attrs[k] = clamp(attrs[k] + src[k]);
+      });
+    });
 
     // 天赋初始加成
     talents.forEach(t => {
@@ -218,6 +376,8 @@
         dayMasterNature: bazi.dayMasterNature,
         wuxing: bazi.wuxing,
         wuxingText: bazi.wuxingText,
+        familyJob: job.name,
+        region: region.name,
         era: Bazi.eraFor(year)
       };
     }
@@ -236,6 +396,8 @@
       attrs,
       lifespan,
       family: familyTier(attrs.wealth, year),
+      familyJob: familyJob,
+      region: region,
       birth: birth
     };
   }
@@ -253,6 +415,8 @@
   }
 
   global.TALENTS = TALENTS;
+  global.FAMILY_JOBS = FAMILY_JOBS;
+  global.REGIONS = REGIONS;
   global.rollTalents = rollTalents;
   global.createCharacter = createCharacter;
   global.familyTier = familyTier;

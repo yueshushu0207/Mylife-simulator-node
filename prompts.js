@@ -44,6 +44,12 @@ function stateDigest(s) {
     `性别：${s.gender}`,
     `天赋：${talentsText(s.talents)}`,
     `家境：${fam.level || ''}——${fam.desc || ''}（18岁前"资产"代表家庭经济状况，18岁后代表个人财富）`,
+    s.familyJob && s.familyJob.name
+      ? `家庭行业：${s.familyJob.name}——${s.familyJob.note || ''}（这是「父母职业与家庭生计」的出身背景，须贴合该行业且符合所处年代；但初生者本人将来从事什么职业由命运自由发展，不得预设或强制其继承该行业）`
+      : '',
+    s.region && s.region.name
+      ? `出生地：${s.region.name}——${s.region.note || ''}（风物、饮食、地貌、城乡景观须贴合该地区与所处年代；出生地只是出身背景，不限制初生者成年后去往何处）`
+      : '',
     '属性（0-100）：',
     `  健康 ${a.health}（${attrLevel(a.health)}）`,
     `  情感 ${a.emotion}（${attrLevel(a.emotion)}）`,
@@ -67,7 +73,7 @@ function stateDigest(s) {
   if (a.health <= 20) lines.push('提示：健康已岌岌可危，本次事件应体现疾病/病危压力。');
   if (a.emotion <= 20) lines.push('提示：情绪处于抑郁边缘，可安排心理危机事件，但出路应包含求助选项。');
   if (a.wealth <= 19 && s.age >= 18) lines.push('提示：经济赤贫，生存压力事件优先。');
-  return lines.join('\n');
+  return lines.filter(Boolean).join('\n');
 }
 
 function recentDigest(s) {
@@ -138,7 +144,9 @@ function eventSystemPrompt() {
     '   - 0-6 岁婴幼儿没有自主行动能力，选项必须以"父母/监护人替孩子做决定"的视角书写；',
     '   - 7-18 岁学生阶段以家庭、校园、学习、同伴事件为主；',
     '   - 19 岁以后才允许出现婚恋、职场、创业等成人事件；',
-    '   - 61 岁后以退休、养老、健康、代际事件为主。',
+    '   - 61 岁后以退休、养老、健康、代际事件为主；',
+    '   - 家庭行业是「初生者出生时的家庭出身背景」，即父母的职业与家庭生计（如工人家庭、农民家庭、商人家庭），它只塑造成长环境与早年际遇；初生者本人将来从事什么职业由命运自由发展，绝不能预设或强制其继承父母行业——不得出现"子承父业""接父母的班成了工人/农民/商人"这类把初生者职业锁定为家庭行业的写法。家庭行业的境遇须符合当年年代（如 60-70 年代的商人谨小慎微、90 年代的工人下岗、2010 年代的考公热）。',
+    '   - 出生地是「初生者出生的省份」这一地理背景：剧情中的饮食、方言称谓、地貌气候、城乡景观须贴合该省份（如河南写麦田与胡辣汤、上海写弄堂与石库门、广东写骑楼与早茶、东北写厂区大院、甘肃写黄土沟壑），且须符合当年年代；出生地只是出身背景，不限制初生者成年后去往何处。',
     '4. 提供 3-5 个选项，整体风格需差异化覆盖：稳扎稳打（保守）、激进冒险（搏一把）、随遇而安（佛系）、另辟蹊径（另类）；各选项导致的属性走向必须明显不同。',
     '5. 每个选项必须携带 effects 字段表示属性变动：',
     '   - 键名仅允许：health、emotion、social、wealth、knowledge、morality、luck；',
@@ -186,7 +194,7 @@ function buildBirthMessages(s) {
   const b = s.birth || null;
   const sys = [
     '你是"文字人生模拟器"的出生叙事引擎，只输出一个 JSON 对象，不要输出任何多余文字或 markdown。',
-    '任务：根据给定的出生信息（生辰、八字、性别、家境），撰写一段出生剧情，交代家庭背景、父母状况、接生场景、出生环境与一个有记忆点的降生细节，为一生埋下基调。',
+    '任务：根据给定的出生信息（生辰、八字、性别、家境、家庭行业、出生地区），撰写一段出生剧情，交代家庭背景、父母职业与状况、出生地风物、接生场景、出生环境与一个有记忆点的降生细节，为一生埋下基调。',
     '要求：',
     '1. 第二人称"你"叙事，120-180 字，文笔克制、真实、有烟火气，不浮夸；',
     b && b.year
@@ -195,16 +203,20 @@ function buildBirthMessages(s) {
     b && b.year
       ? `3. 家境与时代购买力相符（角色生于${b.era.label}：${b.era.backdrop}），"富"与"穷"的写法必须符合该年代；`
       : '3. 家境描述必须与给定资产水平相符；',
-    '4. 八字与五行可以民间说法隐约体现（如"八字齐全""八字火旺""命中缺水"、家人请人算过命），作为命运伏笔，但文案中不得出现任何属性名与数值；',
-    '5. 中立写实，不涉及政治人物与政治评价；',
-    '6. 输出 Schema：{"title":"降生","description":"..."}'
+    '4. 父母职业与家庭生计必须严格贴合给定的"家庭行业"，且行业境遇符合该年代（如 60-70 年代做生意叫"投机倒把"、90 年代工人面临下岗）；',
+    '5. 出生地点与风物必须贴合给定的"出生地区"（如河南的麦田与胡辣汤、上海的弄堂与石库门、广东的骑楼与早茶、东北的厂区大院、甘肃的黄土沟壑），且符合当年年代；',
+    '6. 八字与五行可以民间说法隐约体现（如"八字齐全""八字火旺""命中缺水"、家人请人算过命），作为命运伏笔，但文案中不得出现任何属性名与数值；',
+    '7. 中立写实，不涉及政治人物与政治评价；',
+    '8. 输出 Schema：{"title":"降生","description":"..."}'
   ].join('\n');
   const a = s.attrs || {};
   const fam = s.family || {};
   const userParts = [
     `性别：${s.gender}`,
     `天赋：${talentsText(s.talents)}`,
-    `家境：${fam.level || ''}——${fam.desc || ''}`
+    `家境：${fam.level || ''}——${fam.desc || ''}`,
+    s.familyJob && s.familyJob.name ? `家庭行业：${s.familyJob.name}——${s.familyJob.note || ''}` : '',
+    s.region && s.region.name ? `出生地区：${s.region.name}——${s.region.note || ''}` : ''
   ];
   if (b && b.year) {
     userParts.push(`出生：${b.year} 年 ${b.month} 月 ${b.day} 日（${b.hourLabel || '时辰不详'}）`);
@@ -213,7 +225,7 @@ function buildBirthMessages(s) {
     userParts.push(`年代购买力：${Bazi.purchaseFor(b.year).anchor}`);
   }
   userParts.push(`初始属性：健康${a.health} 情感${a.emotion} 社会${a.social} 资产${a.wealth} 学识${a.knowledge} 品德${a.morality} 运气${a.luck}`);
-  return [{ role: 'system', content: sys }, { role: 'user', content: userParts.join('\n') }];
+  return [{ role: 'system', content: sys }, { role: 'user', content: userParts.filter(Boolean).join('\n') }];
 }
 
 function buildEventMessages(s, extra) {
@@ -306,7 +318,9 @@ function buildEndingMessages(s, extra) {
   ];
   const b = s.birth;
   if (b && b.year) {
-    userParts.push(`【出生】${b.year} 年（${b.era.label}），八字：${b.bazi.year}年 ${b.bazi.month}月 ${b.bazi.day}日 ${b.bazi.hour}时，日主${b.dayMaster}`);
+    const jobTail = (s.familyJob && s.familyJob.name) ? `，家庭出身（父母行业）：${s.familyJob.name}` : '';
+    const regionTail = (s.region && s.region.name) ? `，出生地：${s.region.name}` : '';
+    userParts.push(`【出生】${b.year} 年（${b.era.label}），八字：${b.bazi.year}年 ${b.bazi.month}月 ${b.bazi.day}日 ${b.bazi.hour}时，日主${b.dayMaster}${jobTail}${regionTail}`);
   }
   userParts.push(
     `【最终属性】健康${a.health} 情感${a.emotion} 社会${a.social} 资产${a.wealth} 学识${a.knowledge} 品德${a.morality} 运气${a.luck}`,
@@ -330,4 +344,4 @@ function buildRequest(kind, state, extra) {
   }
 }
 
-module.exports = { buildRequest, endingTier, formatEffects };
+module.exports = { buildRequest, endingTier, formatEffects, buildBirthMessages, stateDigest };

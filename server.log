@@ -1,2 +1,2 @@
-{"level":30,"time":1792967410427,"pid":31004,"hostname":"yuezl","msg":"config>{\"host\":\"www.yueshushu.top\",\"user\":\"root\",\"password\":\"******\",\"database\":\"stock\",\"port\":3306}"}
-{"level":30,"time":1792967410428,"pid":31004,"hostname":"yuezl","msg":"MySQL MCP server running on stdio"}
+人生模拟器（Node 版）已启动: http://localhost:3000
+出品：金亥跃江 · 作者：岳泽霖 · 生辰记录目录：G:\AGithubOld\Mylife-simulator-node\data

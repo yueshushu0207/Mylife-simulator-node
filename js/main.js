@@ -92,6 +92,8 @@
 
   function renderProfile(s) {
     $('profile-gender').textContent = s.gender;
+    $('profile-famjob').textContent = (s.familyJob && s.familyJob.name) || '随机';
+    if ($('profile-region')) $('profile-region').textContent = (s.region && s.region.name) || '随机';
     $('profile-talents').innerHTML = s.talents.map(t =>
       `<span class="talent-chip t-${t.tier}" title="${escapeHtml(t.desc)}">${escapeHtml(t.name)}</span>`
     ).join('');
@@ -294,7 +296,7 @@
   function daysInMonth(y, m) { return new Date(y, m, 0).getDate(); }
 
   function initBirthForm() {
-    const yEl = $('bf-year'), mEl = $('bf-month'), dEl = $('bf-day'), hEl = $('bf-hour');
+    const yEl = $('bf-year'), mEl = $('bf-month'), dEl = $('bf-day'), hEl = $('bf-hour'), jEl = $('bf-family-job'), rEl = $('bf-region');
 
     for (let m = 1; m <= 12; m++) {
       mEl.insertAdjacentHTML('beforeend', `<option value="${m}">${m} 月</option>`);
@@ -322,6 +324,20 @@
     });
     hEl.value = '';
 
+    // 家庭行业下拉：随机 + 常见行业（列表来自 talents.js 的 FAMILY_JOBS）
+    jEl.insertAdjacentHTML('beforeend', '<option value="随机">随机</option>');
+    (window.FAMILY_JOBS || []).forEach(j => {
+      jEl.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(j.name)}">${escapeHtml(j.name)}</option>`);
+    });
+    jEl.value = '随机';
+
+    // 出生地区下拉：随机 + 34 个省级行政区（列表来自 talents.js 的 REGIONS）
+    rEl.insertAdjacentHTML('beforeend', '<option value="随机">随机</option>');
+    (window.REGIONS || []).forEach(r => {
+      rEl.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}</option>`);
+    });
+    rEl.value = '随机';
+
     // 性别分段按钮
     const genderBox = $('bf-gender');
     genderBox.querySelectorAll('button').forEach(b => {
@@ -332,7 +348,7 @@
     });
 
     // 输入即时刷新排盘预览
-    [yEl, mEl, dEl, hEl].forEach(el => {
+    [yEl, mEl, dEl, hEl, jEl, rEl].forEach(el => {
       el.addEventListener('input', updateBaziPreview);
       el.addEventListener('change', updateBaziPreview);
     });
@@ -348,10 +364,34 @@
     const hour = hRaw === '' ? null : parseInt(hRaw, 10);
     const genderBtn = document.querySelector('#bf-gender button.on');
     const gender = genderBtn ? genderBtn.dataset.v : '随机';
+    const familyJob = ($('bf-family-job') && $('bf-family-job').value) || '随机';
+    const region = ($('bf-region') && $('bf-region').value) || '随机';
     if (!isFinite(y) || y < 1949 || y > 2026) return { error: '出生年份需在 1949 - 2026 之间' };
     if (!isFinite(m) || m < 1 || m > 12) return { error: '出生月份不合法' };
     if (!isFinite(d) || d < 1 || d > daysInMonth(y, m)) return { error: '该月没有 ' + d + ' 日，请检查出生日期' };
-    return { year: y, month: m, day: d, hour: hour, gender: gender };
+    return { year: y, month: m, day: d, hour: hour, gender: gender, familyJob: familyJob, region: region };
+  }
+
+  // 家庭行业预览行（选"随机"时不展示具体行业）
+  function jobPreview(info) {
+    if (!info.familyJob || info.familyJob === '随机' || !window.FAMILY_JOBS) return '';
+    const job = FAMILY_JOBS.find(j => j.name === info.familyJob);
+    if (!job) return '';
+    const bands = job.bands || [];
+    const band = bands.find(b => info.year >= b.from && info.year <= b.to) || bands[bands.length - 1] || {};
+    const note = band.note || job.note || '';
+    return '<p>家庭行业：<b>' + escapeHtml(job.name) + '</b>' + (note ? '——' + escapeHtml(note) : '') + '</p>';
+  }
+
+  // 出生地区预览行（选"随机"时不展示具体地区）
+  function regionPreview(info) {
+    if (!info.region || info.region === '随机' || !window.REGIONS) return '';
+    const region = REGIONS.find(r => r.name === info.region);
+    if (!region) return '';
+    const bands = region.bands || [];
+    const band = bands.find(b => info.year >= b.from && info.year <= b.to) || bands[bands.length - 1] || {};
+    const note = band.note || '';
+    return '<p>出生地区：<b>' + escapeHtml(region.name) + '</b>' + (note ? '——' + escapeHtml(note) : '') + '</p>';
   }
 
   // 实时排盘预览：四柱 / 日主 / 五行 / 时代背景
@@ -370,7 +410,9 @@
     ).join('');
     $('bazi-meta').innerHTML = '日主 <b>' + escapeHtml(b.dayMaster) + '</b>（' + escapeHtml(b.dayMasterNature) + '） · ' + escapeHtml(b.wuxingText);
     $('bazi-era').innerHTML = '<b>' + escapeHtml(era.label) + '</b>（' + era.from + '-' + era.to + '）<p>' + escapeHtml(era.backdrop) + '</p>'
-      + '<p>年代购买力：' + escapeHtml(Bazi.purchaseFor(info.year).anchor) + '</p>';
+      + '<p>年代购买力：' + escapeHtml(Bazi.purchaseFor(info.year).anchor) + '</p>'
+      + jobPreview(info)
+      + regionPreview(info);
   }
 
   // 上报生辰到服务端 data/ 目录（异步，失败静默，不影响游戏）
@@ -382,7 +424,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           year: info.year, month: info.month, day: info.day,
-          hour: info.hour, gender: info.gender
+          hour: info.hour, gender: info.gender, familyJob: info.familyJob, region: info.region
         })
       }).catch(() => { /* 记录失败不打扰玩家 */ });
     } catch (_) { /* ignore */ }

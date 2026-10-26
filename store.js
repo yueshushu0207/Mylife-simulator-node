@@ -34,7 +34,7 @@ function ensureDataDir() {
 /* ---------------- CSV ---------------- */
 const CSV_HEADER = [
   'id', 'created_at', 'birth_year', 'birth_month', 'birth_day', 'birth_hour',
-  'hour_label', 'hour_known', 'gender',
+  'hour_label', 'hour_known', 'gender', 'family_job', 'region',
   'year_pillar', 'month_pillar', 'day_pillar', 'hour_pillar',
   'day_master', 'day_master_nature',
   'wuxing_jin', 'wuxing_mu', 'wuxing_shui', 'wuxing_huo', 'wuxing_tu',
@@ -50,13 +50,34 @@ function toCsvLine(rec) {
   return [
     rec.id, rec.createdAt, rec.birth.year, rec.birth.month, rec.birth.day,
     rec.birth.hour === null ? '' : rec.birth.hour,
-    rec.birth.hourLabel || '不详', rec.birth.hourKnown ? 'Y' : 'N', rec.birth.gender,
+    rec.birth.hourLabel || '不详', rec.birth.hourKnown ? 'Y' : 'N',
+    rec.birth.gender, rec.birth.familyJob || '随机', rec.birth.region || '随机',
     rec.bazi.year, rec.bazi.month, rec.bazi.day, rec.bazi.hour,
     rec.dayMaster, rec.dayMasterNature,
     rec.wuxing['金'] || 0, rec.wuxing['木'] || 0, rec.wuxing['水'] || 0,
     rec.wuxing['火'] || 0, rec.wuxing['土'] || 0,
     rec.era.from, rec.era.to, rec.era.label
   ].map(csvEscape).join(',');
+}
+
+/* CSV 迁移：老表头升级为新表头（gender 后补 family_job，family_job 后补 region） */
+function migrateCsvHeader() {
+  if (!fs.existsSync(CSV_FILE) || fs.statSync(CSV_FILE).size === 0) return;
+  const text = fs.readFileSync(CSV_FILE, 'utf8');
+  const firstLine = (text.split('\n')[0] || '').replace(/^\uFEFF/, '');
+  if (firstLine === CSV_HEADER.join(',')) return; // 已是新表头
+  if (!firstLine.startsWith('id,')) return; // 非本程序生成的文件，不改动
+  const target = CSV_HEADER.length;
+  const bodyLines = text.split('\n').slice(1).filter(l => l.trim());
+  const migrated = bodyLines.map(l => {
+    const cols = l.split(',');
+    // 最老格式 23 列：无 family_job 也无 region → gender（下标 8）后补两列空
+    if (cols.length === target - 2) cols.splice(9, 0, '', '');
+    // 次新格式 24 列：有 family_job 无 region → family_job（下标 9）后补一列空
+    else if (cols.length === target - 1) cols.splice(10, 0, '');
+    return cols.join(',');
+  });
+  fs.writeFileSync(CSV_FILE, '\uFEFF' + CSV_HEADER.join(',') + '\n' + migrated.join('\n') + '\n', 'utf8');
 }
 
 /* ---------------- 统计汇总 ---------------- */
@@ -70,12 +91,16 @@ function readRecords() {
 }
 
 function buildSummary(records) {
-  const byYear = {}, byGender = {}, byHour = { '已知': 0, '不详': 0 };
+  const byYear = {}, byGender = {}, byHour = { '已知': 0, '不详': 0 }, byFamilyJob = {}, byRegion = {};
   records.forEach(r => {
     const y = r.birth && r.birth.year;
     if (y) byYear[y] = (byYear[y] || 0) + 1;
     const g = (r.birth && r.birth.gender) || '未知';
     byGender[g] = (byGender[g] || 0) + 1;
+    const fj = (r.birth && r.birth.familyJob) || '随机';
+    byFamilyJob[fj] = (byFamilyJob[fj] || 0) + 1;
+    const rg = (r.birth && r.birth.region) || '随机';
+    byRegion[rg] = (byRegion[rg] || 0) + 1;
     if (r.birth && r.birth.hourKnown) byHour['已知']++; else byHour['不详']++;
   });
   const sortDesc = obj => Object.fromEntries(Object.entries(obj).sort((a, b) => b[1] - a[1]));
@@ -86,6 +111,8 @@ function buildSummary(records) {
     lastRecordAt: records.length ? records[records.length - 1].createdAt : null,
     byBirthYear: sortDesc(byYear),
     byGender: byGender,
+    byFamilyJob: sortDesc(byFamilyJob),
+    byRegion: sortDesc(byRegion),
     byHourKnown: byHour,
     recent: records.slice(-20).reverse().map(r => ({
       id: r.id, createdAt: r.createdAt,
@@ -111,6 +138,17 @@ function saveBaziRecord(birth) {
   const h = (birth.hour === null || birth.hour === undefined || birth.hour === '' || birth.hour === '不详')
     ? null : parseInt(birth.hour, 10);
   const gender = birth.gender || '随机';
+  // 家庭行业白名单（与 js/talents.js 的 FAMILY_JOBS 保持一致，脏值一律回落"随机"）
+  const FAMILY_JOB_WHITELIST = ['农民', '工人', '商人', '教师', '公务员', '军人', '医生', '手艺人'];
+  const familyJob = FAMILY_JOB_WHITELIST.includes(birth.familyJob) ? birth.familyJob : '随机';
+  // 出生地区白名单（与 js/talents.js 的 REGIONS 保持一致：34 个省级行政区）
+  const REGION_WHITELIST = ['北京', '上海', '天津', '重庆',
+    '广东', '江苏', '浙江', '福建', '海南',
+    '山东', '河南', '黑龙江', '吉林', '辽宁',
+    '河北', '山西', '湖北', '湖南', '安徽', '江西',
+    '陕西', '甘肃', '青海', '宁夏', '新疆', '西藏', '云南', '贵州', '四川', '广西', '内蒙古',
+    '中国香港', '中国澳门', '中国台湾'];
+  const region = REGION_WHITELIST.includes(birth.region) ? birth.region : '随机';
 
   if (!isFinite(y) || y < 1900 || y > new Date().getFullYear()) return Promise.resolve({ ok: false, error: '出生年份不合法' });
   if (!isFinite(m) || m < 1 || m > 12) return Promise.resolve({ ok: false, error: '出生月份不合法' });
@@ -138,7 +176,9 @@ function saveBaziRecord(birth) {
       year: y, month: m, day: d,
       hour: h, hourLabel: h !== null ? b.hourLabel : '时辰不详',
       hourKnown: h !== null,
-      gender: gender
+      gender: gender,
+      familyJob: familyJob,
+      region: region
     },
     bazi: b.pillars,
     dayMaster: b.dayMaster,
@@ -155,7 +195,8 @@ function saveBaziRecord(birth) {
     // 1) JSONL 追加
     fs.appendFileSync(JSONL_FILE, JSON.stringify(rec) + '\n', 'utf8');
 
-    // 2) CSV 追加（首行写表头）
+    // 2) CSV 追加（首行写表头；老文件自动迁移补新列）
+    migrateCsvHeader();
     const records = readRecords();
     const needHeader = !fs.existsSync(CSV_FILE) || fs.statSync(CSV_FILE).size === 0;
     let csv = toCsvLine(rec) + '\n';

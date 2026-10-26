@@ -231,7 +231,8 @@ async function handleBaziRecord(req, res) {
 
   const result = await store.saveBaziRecord({
     year: body.year, month: body.month, day: body.day,
-    hour: body.hour === '' ? null : body.hour, gender: body.gender
+    hour: body.hour === '' ? null : body.hour, gender: body.gender,
+    familyJob: body.familyJob, region: body.region
   });
 
   if (!result.ok) return send(res, 400, { error: result.error || '记录失败' });
